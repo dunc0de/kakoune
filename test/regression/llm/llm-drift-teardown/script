@@ -1,0 +1,13 @@
+#!/bin/sh
+KAK="$kak"
+# Leave the cursor at its default position (1:1), which differs from the drift
+# anchor (1:6): this delta is stale -> drift path drops it and tears the stream
+# down, leaving the buffer unchanged.
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-append-delta Wk9P
+EOF
+sleep 0.3
+# Correctness enforced by the harness's generated-out comparison (bufcontent is
+# undefined in Kakoune). Drift drops the stale delta: nothing inserted -> buffer
+# unchanged.
+sleep 0.3

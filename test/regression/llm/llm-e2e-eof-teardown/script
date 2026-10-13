@@ -1,0 +1,11 @@
+#!/bin/sh
+# E2E: closing the events FIFO (EOF) triggers the body's teardown path, which
+# calls llm-stop to tear the session down and remove the temp dir. Verifies
+# graceful teardown on stream end / Qwen exit.
+. "$root/test/regression/llm/_llm_body.sh"
+llm_body_run
+llm_body_open
+llm_body_feed '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}'
+llm_body_close   # closing the O_RDWR fd -> EOF for the body's reader
+llm_body_wait
+llm_body_calls 'llm-stop'

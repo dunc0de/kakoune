@@ -1,0 +1,32 @@
+#!/bin/sh
+# F4 regression: `:llm-approve` confirms buffered control requests by writing a
+# confirmation_response for each pending id to the --input-file channel and
+# clearing the pending buffer; it is a no-op when nothing is pending.
+KAK="$kak"
+workdir=$(mktemp -d /tmp/llm-approve.XXXXXX)
+pending="${workdir}/pending_control_requests.jsonl"
+input="${workdir}/input.jsonl"
+printf 'req-42\n' > "$pending"
+: > "$input"
+
+$KAK -p kak-tests <<EOF
+# NOTE: the harness already sources rc, which loads the llm module (so the
+# llm-approve command + options exist); we must NOT re-source here or
+# 'provide-module: module already defined' aborts the whole -p command batch.
+set global llm_dir "${workdir}"
+set global llm_auto_approve_control false
+llm-approve
+EOF
+sleep 0.3
+
+# confirmation_response written for the pending id; pending buffer cleared.
+if grep -q '"type":"confirmation_response"' "$input" 2>/dev/null \
+   && grep -q '"request_id":"req-42"' "$input" 2>/dev/null \
+   && [ ! -s "$pending" ]; then
+    : # PASS
+else
+    echo "F4-approve: FAIL" >&2
+    echo "  input:   $(cat "$input" 2>/dev/null)" >&2
+    echo "  pending: $(cat "$pending" 2>/dev/null)" >&2
+    fail_ifn
+fi

@@ -1,0 +1,14 @@
+#!/bin/sh
+# E2E: a content_block_delta round-trips byte-faithfully through the detached
+# tailer -- base64-encode -> llm-append-delta command. Verifies the special
+# bytes (<, space, parens, digits) survive the round-trip exactly. The tailer
+# body runs standalone (see _llm_body.sh) so this exercises identical code
+# without depending on `-p`, which does not execute in these harness sessions.
+. "$root/test/regression/llm/_llm_body.sh"
+llm_body_run
+llm_body_open
+llm_body_feed '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello<World Foo (123)"}}}'
+llm_body_close
+llm_body_wait
+expected=$(printf '%s' 'Hello<World Foo (123)' | base64 -w0 | tr -d '\n')
+llm_body_calls "llm-append-delta '${expected}'"

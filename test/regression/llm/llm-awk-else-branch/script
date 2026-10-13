@@ -1,0 +1,14 @@
+#!/bin/sh
+KAK="$kak"
+# llm-reject reads the pre-draft snapshot to find the start line; provide it (stateful,
+# like the other staged tests) so the awk else-branch fires on a_col==1.
+mkdir -p /tmp/llm-test
+printf 'x BAR y\n' > /tmp/llm-test/pre.txt
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-reject
+EOF
+# Correctness enforced by the harness's generated-out comparison against this
+# dir's `out` (= "x foo"). bufcontent is undefined in Kakoune, so we rely on the
+# harness writing the final buffer to `out`. else-branch (a_col==1) erases the
+# span leaving "x foo".
+sleep 0.3

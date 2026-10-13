@@ -1,0 +1,28 @@
+#!/bin/sh
+# F4 regression: by default the detached tailer does NOT auto-approve a
+# control_request. It buffers the request_id to a per-session pending file and
+# emits ONE status-line summary listing pending ids; no confirmation_response is
+# written to the input channel until the user runs `:llm-approve`.
+#
+# In the standalone body harness the Kakoune option
+# `${kak_opt_llm_auto_approve_control}` is not expanded (no live session), so it
+# reads empty -> the buffered default path is exercised here.
+. "$root/test/regression/llm/_llm_body.sh"
+llm_body_run
+llm_body_open
+llm_body_feed '{"subtype":"session_start","data":{"supported_events":["control_request"]}}'
+llm_body_feed '{"type":"control_request","request_id":"req-42"}'
+llm_body_close
+llm_body_wait
+
+# Buffered: pending file records the id, NO confirmation_response emitted.
+if grep -q 'req-42' "$LLM_BODY_DIR/pending_control_requests.jsonl" 2>/dev/null \
+   && ! grep -q '"type":"confirmation_response"' "$LLM_BODY_DIR/input.jsonl" 2>/dev/null; then
+    : # PASS
+else
+    echo "F4-buffered: FAIL (pending=$(cat "$LLM_BODY_DIR/pending_control_requests.jsonl" 2>/dev/null) input=$(cat "$LLM_BODY_DIR/input.jsonl" 2>/dev/null))" >&2
+    fail_ifn
+fi
+
+# Surface: ONE status-line summary listing pending ids was emitted to the calls log.
+llm_body_calls 'llm-approve pending'

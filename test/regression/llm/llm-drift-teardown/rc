@@ -1,0 +1,7 @@
+source "%val{runtime}/rc/tools/llm.kak"
+require-module llm
+set global llm_client client0
+set global llm_dir /tmp/llm-test
+set global llm_draft_active true
+set global llm_draft_start "1 3"
+set global llm_draft_anchor "1 6"

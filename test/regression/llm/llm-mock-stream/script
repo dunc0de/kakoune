@@ -1,0 +1,28 @@
+#!/bin/sh
+# Regression: a mock Qwen binary writes realistic content_block_delta JSONL to
+# the events FIFO; the detached tailer body consumes it and emits
+# llm-append-delta. This exercises the writer -> FIFO -> tailer data flow the
+# production path relies on, via the standalone-body harness (identical
+# llm-tail-loop code) so it does not depend on `-p`, which does not execute in
+# these harness sessions.
+#
+# It also pins the FIFO pre-open fix in llm-session: once the tailer is reading,
+# the mock's open-for-write must not block on the open() handshake.
+#
+# SAFETY against harness hangs: the body is wrapped in timeout; the body's
+# inherited fds are closed; the body is killed before exit.
+. "$root/test/regression/llm/_llm_body.sh"
+
+# Make the mock Qwen binary resolvable on PATH exactly as production resolves
+# llm_cmd, so this also pins the PATH-resolution contract.
+export PATH="$root/test/regression/llm/stubs:$PATH"
+
+llm_body_run   # launch the standalone tailer body (opens the FIFO for reading)
+
+# Mock Qwen writes realistic events to the events FIFO via --json-file, exactly
+# as the real binary would on the production path.
+MOCK_LLM_DELTA='streaming text' mock-llm --json-file "$LLM_BODY_DIR/events.jsonl"
+
+llm_body_wait
+expected=$(printf '%s' 'streaming text' | base64 -w0 | tr -d '\n')
+llm_body_calls "llm-append-delta '${expected}'"

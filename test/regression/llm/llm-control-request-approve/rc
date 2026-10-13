@@ -1,0 +1,3 @@
+source "%val{runtime}/rc/tools/llm.kak"
+require-module llm
+set global llm_client client0

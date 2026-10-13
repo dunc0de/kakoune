@@ -1,0 +1,73 @@
+#!/bin/sh
+# F1 E2E regression: assert llm-session launch, FIFO handshake, and PGID teardown
+# per REVIEW_LLM_KAK-08.md F1. Exercises the real llm-session launcher and llm-stop
+# teardown body against stubs/mock-llm, asserting:
+#   (a) llm-session creates temp dir, starts mock-llm PGID, FIFO handshake succeeds
+#   (b) .dbg records guard passed and body started
+#   (c) llm-stop kills PGID and removes temp dir
+. "$root/test/regression/llm/_llm_body.sh"
+
+llm_session_run
+llm_session_state
+
+# State present
+if [ -z "$llm_session_pid" ] || [ -z "$llm_session_dir" ]; then
+    echo "lifecycle-state: FAIL (pid=$llm_session_pid dir=$llm_session_dir)" >&2
+    fail_ifn
+fi
+if ! llm_session_alive; then
+    echo "lifecycle-alive-before: FAIL" >&2
+    fail_ifn
+fi
+if ! llm_session_dir_exists; then
+    echo "lifecycle-dir-before: FAIL" >&2
+    fail_ifn
+fi
+
+# FIFO handshake verification
+fifo="$llm_session_dir/events.jsonl"
+if [ ! -p "$fifo" ]; then
+    echo "fifo-type: FAIL ($fifo not a FIFO)" >&2
+    fail_ifn
+fi
+
+# Allow tailer launch to settle before checking .dbg
+sleep 0.5
+
+# .dbg markers for tailer launch and guard
+_dbg="$llm_session_dir/.dbg"
+if [ ! -f "$_dbg" ]; then
+    echo "dbg-missing: FAIL" >&2
+    fail_ifn
+fi
+if ! grep -q "guard passed" "$_dbg"; then
+    echo "dbg-guard-passed: FAIL" >&2
+    fail_ifn
+fi
+if ! grep -q "body started" "$_dbg"; then
+    echo "dbg-body-started: FAIL" >&2
+    fail_ifn
+fi
+
+# State recorded
+llm_session_out "set-option global llm_dir"
+llm_session_out "set-option global llm_pid"
+llm_session_out "llm session started"
+
+# Teardown
+llm_stop_run
+
+# PGID dead, dir removed
+if llm_session_alive; then
+    echo "lifecycle-alive-after: FAIL" >&2
+    fail_ifn
+fi
+if llm_session_dir_exists; then
+    echo "lifecycle-dir-after: FAIL" >&2
+    fail_ifn
+fi
+
+llm_session_calls "llm-draft-clear"
+llm_session_calls "llm session stopped"
+
+echo "lifecycle-fifo-pgid: PASS"

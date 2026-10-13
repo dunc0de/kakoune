@@ -1,0 +1,44 @@
+#!/bin/sh
+# Guard regression (ISSUE-12): reject command/metacharacter injection AND
+# assert the guard's fail-closed `{Error}` message is observable.
+#
+# Payload (base64-encoded):  x;%sh{date>MARKER_PROOF}
+#   - ';'  -> command grouping / chaining
+#   - '%'  -> parameter expansion / %sh{}
+#
+# The rc fixture sets up the full append environment (llm_dir, llm_client,
+# draft state) so that WITHOUT the guard the payload is appended as literal
+# buffer text via _llm_snapshot's `execute-keys -draft i${esc}<esc>`.
+#
+#   guard present -> payload rejected BEFORE insertion -> buffer unchanged -> pass
+#   guard absent  -> payload appended as text      -> buffer has '%sh{...}'   -> fail
+#
+# Gate (a): buffer stays empty WITH guard (payload never inserted).
+# Gate (b): literal `{Error}` observable via the harness capture file
+#           (LLM_GUARD_ERR_FILE, set by test/run). Kakoune's `-ui json` stream
+#           does not capture status-line echoes, so the file is the deterministic
+#           channel — this independently catches a broken delivery path that
+#           silently swallowed the error.
+#
+# NOTE: a marker-file approach was rejected up front: appending text does not
+# execute %sh{}, so no marker is created regardless of the guard -- it would
+# pass whether or not the guard exists.  Buffer content is the real discriminator.
+KAK="$kak"
+errfile="${LLM_GUARD_ERR_FILE:-}"
+PAYLOAD='x;%sh{date>MARKER_PROOF}'
+B64=$(printf '%s' "$PAYLOAD" | base64)
+
+# Harness must provide the capture path (set in test/run).
+if [ -z "$errfile" ]; then fail_ifn; fi
+rm -f "$errfile"
+
+# Fire the guard with an injection payload.
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-append-delta $B64
+EOF
+sleep 0.3
+
+# Gate (a): buffer stays empty WITH guard (payload never inserted).
+if grep -q '%sh{date>MARKER_PROOF}' out 2>/dev/null; then fail_ifn; fi
+# Gate (b): literal `{Error}` observable via the harness capture file.
+if ! grep -q '{Error}' "$errfile" 2>/dev/null; then fail_ifn; fi

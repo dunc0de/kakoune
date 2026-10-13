@@ -1,0 +1,10 @@
+#!/bin/sh
+KAK="$kak"
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-reject
+execute-keys -client client0 u
+EOF
+sleep 0.2
+$KAK -p kak-tests <<EOF
+echo -to-file out -- %val{bufcontent}
+EOF

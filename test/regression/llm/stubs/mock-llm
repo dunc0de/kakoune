@@ -1,0 +1,76 @@
+#!/bin/sh
+# Mock Qwen binary for regression tests. Mirrors the production contract:
+#   mock-llm [--model <m>] --json-file <path>
+# It writes realistic Anthropic-shaped JSONL events to <path> (the FIFO that
+# llm-session creates) and then exits 0. This exercises the *writer* side of
+# the production path (an external process writing event JSONL to the FIFO)
+# without a real Qwen install or network access.
+#
+# SAFETY: opens the FIFO with O_APPEND (no O_TRUNC) via an exec'd fd so the
+# open cannot corrupt an existing reader; closes it on exit so the reader sees
+# EOF and tears the stream down.
+#
+# MOCK_LLM_STREAM=1 keeps writing content_block_delta forever (until SIGKILLed):
+# the pipe buffer fills and the write blocks, so mock-llm stays alive as a live
+# process group -- lets the lifecycle test observe llm-stop's real
+# `kill -KILL -pgid` instead of asserting against an already-exited process.
+# Default (non-streaming) behavior is unchanged so existing tests are unaffected.
+#
+# Ignore SIGPIPE: llm-session closes its pre-open read-write fd before forking the
+# detached tailer, leaving a brief no-reader window. Without this, mock-llm's
+# first streaming write would SIGPIPE and exit instead of blocking on the full
+# pipe buffer (which is what keeps it alive as a live process group). Real Qwen
+# behaves the same way -- it must survive the launcher's fd hand-off.
+trap '' PIPE
+set -e
+
+json_file=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --json-file) json_file="$2"; shift 2 ;;
+        --model)     shift 2 ;;
+        *)           shift ;;
+    esac
+done
+if [ -z "$json_file" ]; then
+    echo "mock-llm: --json-file <path> required" >&2
+    exit 1
+fi
+
+delta="${MOCK_LLM_DELTA:-streaming text}"
+
+# Open the FIFO for writing (O_APPEND, no O_TRUNC -- safe for a named pipe).
+# This blocks until a reader has opened it, exactly like the real Qwen process
+# would on its --json-file channel.
+exec 3>>"$json_file"
+
+if [ -n "$MOCK_LLM_STREAM" ]; then
+  # Streaming mode (lifecycle test only): emit session_start once, then keep
+  # writing content_block_delta until the process group is SIGKILLed.
+  #
+  # Tolerate write failures: llm-session closes its pre-open read-write fd
+  # before forking the detached tailer, and in this harness the detached
+  # tailer cannot start (its -p command never executes), so there is no
+  # reader and writes return EPIPE. Without this tolerance, the failing
+  # printf would trip `set -e` and exit mock-llm instead of keeping it alive
+  # as a live process group -- which is exactly what the lifecycle test needs
+  # to observe llm-stop's real `kill -KILL -pgid`.
+  # Tolerate a first-write EPIPE: in this harness the detached tailer cannot
+  # start (its -p command never executes) and llm-session may already have
+  # closed its pre-open read-write fd, so the very first write can EPIPE.
+  # Like the streaming loop below, survive it so mock-llm stays alive as a
+  # live process group for llm-stop's real `kill -KILL -pgid` to observe.
+  printf '%s\n' '{"subtype":"session_start","data":{"supported_events":["control_request"]}}' >&3 || true
+  while kill -0 $$ 2>/dev/null; do
+    printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"${delta}\"}}}" >&3 || true
+    sleep 0.1
+  done
+else
+  # session_start advertises the control plane (mirrors dual-output.md:281); the
+  # content_block_delta is the event the tailer streams back as inline ghost text
+  # via llm-append-delta. Then close the FIFO so the reader sees EOF.
+  printf '%s\n' '{"subtype":"session_start","data":{"supported_events":["control_request"]}}' >&3
+  printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"${delta}\"}}}" >&3
+fi
+
+exec 3>&-

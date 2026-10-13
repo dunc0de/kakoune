@@ -1,0 +1,11 @@
+#!/bin/sh
+KAK="$kak"
+# base64 of a single BEL control byte (0x07) -> guard rejects -> nothing inserted.
+B64=$(printf '\007' | base64 | tr -d '\n')
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-append-delta $B64
+EOF
+sleep 0.3
+# Correctness enforced by the harness's generated-out comparison (bufcontent is
+# undefined in Kakoune). Guard drops the payload: buffer unchanged.
+sleep 0.3

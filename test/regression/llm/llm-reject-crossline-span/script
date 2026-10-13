@@ -1,0 +1,14 @@
+#!/bin/sh
+KAK="$kak"
+# Cross-line (a_col==1) reject regression (F3): the ghost ends at a newline
+# boundary so its last byte is the newline at the end of line 1. The erase span
+# end must be computed from a FRESH snapshot of the live buffer (taken by
+# llm-reject), not a stale first-delta one. `in` already carries the ghost bytes
+# ("XYZ\n") at the span start/anchor bracket, exactly as the live stream leaves
+# them, so reject+u must restore the original exactly.
+mkdir -p /tmp/llm-reject-cl-test
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-reject
+execute-keys -client client0 u
+EOF
+sleep 0.2

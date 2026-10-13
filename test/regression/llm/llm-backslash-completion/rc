@@ -1,0 +1,9 @@
+source "%val{runtime}/rc/tools/llm.kak"
+require-module llm
+set global llm_client client0
+set global llm_draft_active true
+set global llm_draft_start "1 1"
+set global llm_draft_anchor "1 1"
+# _llm_snapshot writes pre.txt here; needs a writable dir for the guard-absent
+# path to actually insert the payload (otherwise it errors before inserting).
+set global llm_dir /tmp/llm-backslash

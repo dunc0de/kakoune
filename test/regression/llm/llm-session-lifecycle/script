@@ -1,0 +1,60 @@
+#!/bin/sh
+# N4 lifecycle regression: exercises the real llm-session launcher and llm-stop
+# teardown body (rc/tools/llm.kak) against stubs/mock-llm, asserting:
+#   (a) the writer's process group is alive after llm-session and gone after
+#       llm-stop (kill -KILL -pgid targets only mock-llm's setsid group);
+#   (b) the per-session temp dir (llm_dir) exists after launch and is removed
+#       after teardown;
+#   (c) state is recorded in the calls log;
+#   (d) negative control: skipping llm-stop leaves the writer alive + dir intact
+#       -> deterministic FAIL.
+#
+# Per _llm_body.sh, `-p` commands do not execute against these harness sessions,
+# so the bodies run standalone (setsid) with the exact env vars production
+# passes, exercising identical code. kak_send is stubbed to a calls log so
+# emitted commands are observable without a live -p session.
+. "$root/test/regression/llm/_llm_body.sh"
+
+# --- launch the real llm-session body ---
+llm_session_run
+llm_session_state
+
+# Negative control (d): before stop the writer PGID is alive and the dir exists.
+if [ -z "$llm_session_pid" ] || [ -z "$llm_session_dir" ]; then
+    echo "lifecycle-state: FAIL (pid=$llm_session_pid dir=$llm_session_dir)" >&2
+    fail_ifn
+fi
+if ! llm_session_alive; then
+    echo "lifecycle-alive-before: FAIL (pid=$llm_session_pid not alive)" >&2
+    fail_ifn
+fi
+if ! llm_session_dir_exists; then
+    echo "lifecycle-dir-before: FAIL (dir=$llm_session_dir missing)" >&2
+    fail_ifn
+fi
+
+# State recorded on stdout by the launcher body (llm_dir, llm_pid, llm_client).
+llm_session_out "set-option global llm_dir"
+llm_session_out "set-option global llm_pid"
+llm_session_out "llm session started"
+
+# --- teardown via the real llm-stop body ---
+llm_stop_run
+
+# (a) writer process group gone after stop.
+if llm_session_alive; then
+    echo "lifecycle-alive-after: FAIL (pid=$llm_session_pid still alive)" >&2
+    fail_ifn
+fi
+
+# (b) per-session temp dir removed after teardown.
+if llm_session_dir_exists; then
+    echo "lifecycle-dir-after: FAIL (dir=$llm_session_dir still exists)" >&2
+    fail_ifn
+fi
+
+# (c) teardown recorded in the calls log.
+llm_session_calls "llm-draft-clear"
+llm_session_calls "llm session stopped"
+
+echo "lifecycle: PASS"

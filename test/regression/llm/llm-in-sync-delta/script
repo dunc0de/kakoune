@@ -1,0 +1,19 @@
+#!/bin/sh
+KAK="$kak"
+# Leave the cursor at its default position (1:1), which equals the drift anchor
+# (1:1): this delta is "in-sync" -> the delta commits -> "ZOOx BAR y".
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-append-delta Wk9P
+EOF
+sleep 0.3
+# Correctness of the live buffer is enforced by the harness itself: it writes the
+# final buffer to `out` (via write -force in finished_commands) and compares it
+# against this dir's `out`. %val{bufcontent} is undefined in Kakoune, so we do not
+# read it here; the generated-out comparison is the discriminator (a failed
+# commit never reaches execute-keys -> no ghost text -> FAIL).
+#
+# NOTE: F3 removed the per-delta whole-buffer rewrite, so pre.txt is no longer
+# written on an in-sync delta; the harness's `out` comparison above still covers
+# correctness (the delta commits regardless). The explicit pre.txt assertion below
+# tested exactly the O(n^2) behavior F3 removes, so it is dropped.
+sleep 0.3

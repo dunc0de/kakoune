@@ -1,0 +1,14 @@
+#!/bin/sh
+# Verify `llm-accept` produces the expected buffer (`out`).
+#
+# NOTE: the previous version ended with
+#     echo -to-file /tmp/reject_out -- %val{bufcontent}
+# which referenced `%val{bufcontent}` — a value Kakoune never defines — so it
+# errored ("no such variable: bufcontent") before the harness could run its
+# `write -force` comparison against this dir's `out`.  That capture line was
+# removed; the harness's built-in `out` comparison is the real assertion.
+KAK="$kak"
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-accept
+EOF
+sleep 0.2

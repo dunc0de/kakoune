@@ -1,0 +1,29 @@
+#!/bin/sh
+# F2 regression: the injection guard must NOT drop backslash-containing
+# completions. Backslash is Kak-safe -- the awk layer passes it verbatim and
+# Kak treats it 1:1 -- so `C:\Users\x` must pass the guard, while proven
+# injection metacharacters still do not (llm-command-injection-guard covers
+# those).
+#
+# Payload (base64-encoded):  C:\Users\x
+#   - backslash -> allowed (pre-F2 the guard matched `\` in its blacklist and
+#     dropped the delta, writing the fail-closed {Error} message -> FAIL)
+#
+# Discriminator: the deterministic guard capture file (LLM_GUARD_ERR_FILE, set
+# by test/run). Pre-F2 the guard writes {Error} for the backslash payload ->
+# this gate fails -> reproduces F2. Post-F2 the guard allows backslash -> no
+# {Error} emitted -> PASS. The byte-faithful round-trip insertion path itself
+# is already covered by llm-e2e-draft-stream; this test targets the guard.
+KAK="$kak"
+errfile="${LLM_GUARD_ERR_FILE:-}"
+if [ -z "$errfile" ]; then fail_ifn; fi
+rm -f "$errfile"
+
+# Fire the guard with a backslash-containing completion.
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 llm-append-delta $(printf '%s' 'C:\Users\x' | base64 | tr -d '\n')
+EOF
+sleep 0.3
+
+# Gate: the guard did NOT emit its fail-closed {Error} -> backslash allowed.
+if grep -q '{Error}' "$errfile" 2>/dev/null; then fail_ifn; fi

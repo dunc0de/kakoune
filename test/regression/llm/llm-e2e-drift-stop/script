@@ -1,0 +1,12 @@
+#!/bin/sh
+# E2E: a non-empty drift stop-file present before the body starts makes it exit
+# on its very first read iteration -- no events processed, no delta emitted.
+# Verifies the fail-closed drift-stop path end-to-end.
+. "$root/test/regression/llm/_llm_body.sh"
+printf 'drift detected\n' > "$LLM_BODY_DIR/stop"
+llm_body_run
+llm_body_open
+llm_body_feed '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}}'
+llm_body_close
+llm_body_wait
+llm_body_absent 'llm-append-delta'

@@ -1,0 +1,28 @@
+#!/bin/sh
+# F4 regression (dedicated): the detached tailer buffers control_request ids to a
+# per-session pending file and emits a single status-line summary of pending ids;
+# it writes NO confirmation_response until the user runs `:llm-approve`.
+#
+# The standalone body harness cannot expand the Kakoune option
+# `${kak_opt_llm_auto_approve_control}`, so it reads empty -> buffered default.
+. "$root/test/regression/llm/_llm_body.sh"
+llm_body_run
+llm_body_open
+llm_body_feed '{"subtype":"session_start","data":{"supported_events":["control_request"]}}'
+llm_body_feed '{"type":"control_request","request_id":"req-42"}'
+llm_body_feed '{"type":"control_request","request_id":"req-99"}'
+llm_body_close
+llm_body_wait
+
+# Both ids buffered; single summary lists them; no confirmation_response emitted.
+if grep -q 'req-42' "$LLM_BODY_DIR/pending_control_requests.jsonl" 2>/dev/null \
+   && grep -q 'req-99' "$LLM_BODY_DIR/pending_control_requests.jsonl" 2>/dev/null \
+   && ! grep -q '"type":"confirmation_response"' "$LLM_BODY_DIR/input.jsonl" 2>/dev/null; then
+    : # PASS
+else
+    echo "F4-buffered-multi: FAIL" >&2
+    echo "  pending: $(cat "$LLM_BODY_DIR/pending_control_requests.jsonl" 2>/dev/null)" >&2
+    echo "  input:   $(cat "$LLM_BODY_DIR/input.jsonl" 2>/dev/null)" >&2
+    fail_ifn
+fi
+llm_body_calls 'llm-approve pending'

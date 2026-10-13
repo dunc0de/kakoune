@@ -1,0 +1,41 @@
+#!/bin/sh
+# Detached tailer lifecycle regression. Exercises the full lifecycle of the real
+# llm-tail-loop body (rc/tools/llm.kak) across its distinct paths in a single
+# live body instance so state persists:
+#   1. session_start  -> feature-detects the control plane (supports_control)
+#   2. content_block_delta -> delivered as ONE faithful base64 arg to llm-append-delta
+#   3. control_request -> confirmation_response written to the --input-file channel
+#   4. EOF (FIFO close) -> llm-stop teardown write-back
+#
+# Robustness: per _llm_body.sh, `-p` commands do not execute against these
+# harness sessions, so the detached body runs standalone (setsid) with the exact
+# env vars production passes, exercising identical code. kak_send is stubbed to a
+# log file so emitted commands are observable without a live -p session.
+. "$root/test/regression/llm/_llm_body.sh"
+
+# --- 1+2: session_start advertises the control plane; a delta round-trips ---
+llm_body_run
+llm_body_open
+llm_body_feed '{"subtype":"session_start","data":{"supported_events":["control_request"]}}'
+llm_body_feed '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello<World Foo (123)"}}}'
+# --- 3: control_request is BUFFERED by default (F4): pending file populated,
+#     no confirmation_response emitted until the user runs `:llm-approve`. ---
+llm_body_feed '{"type":"control_request","request_id":"req-42"}'
+llm_body_close   # closing the O_RDWR fd -> EOF for the body's reader
+llm_body_wait
+
+# Delta delivered as one faithful base64 argument to llm-append-delta.
+expected=$(printf '%s' 'Hello<World Foo (123)' | base64 -w0 | tr -d '\n')
+llm_body_calls "llm-append-delta '${expected}'"
+
+# Control plane buffered, not auto-approved: pending file has the id, no response.
+if grep -q 'req-42' "$LLM_BODY_DIR/pending_control_requests.jsonl" 2>/dev/null \
+   && ! grep -q '"type":"confirmation_response"' "$LLM_BODY_DIR/input.jsonl" 2>/dev/null; then
+    : # PASS
+else
+    echo "lifecycle-control-buffered: FAIL" >&2
+    fail_ifn
+fi
+
+# --- 4: EOF teardown emits llm-stop ---
+llm_body_calls 'llm-stop'

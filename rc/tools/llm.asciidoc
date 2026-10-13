@@ -1,0 +1,159 @@
+= llm module
+
+// Companion documentation for rc/tools/llm.kak (async socket bridge for
+// streaming Qwen Dual Output completions as inline ghost text).
+// This file documents the module's user-facing surface (options + commands),
+// its *build requirement*, and its validation procedure. It is intentionally
+// separate from llm.kak so the module source is not cluttered with
+// environment-specific notes.
+
+== Purpose
+
+rc/tools/llm.kak streams model output from a detached Qwen Code process into the
+editor as per-token inline ghost text, and answers control_request approval
+prompts via `confirmation_response`. It is configured through four user-facing
+options (see <<_options>>) and exposes these user-facing commands:
+
+* `llm-session [<prompt>]` — launch Qwen Code detached (Dual Output) for inline
+  streaming completions. An optional `<prompt>` is passed to Qwen via its own
+  stdin (`--prompt`) — the `--input-file` channel is reserved for later
+  `submit`/`confirmation_response` round-trips once the session is alive. When
+  omitted, a default prompt is derived from the current Kakoune selection, else
+  the current buffer line, else the neutral string `Continue.` — so a bare
+  invocation still keeps Qwen alive.
+* `llm-stop` — tear down the running Qwen session (kills its process group,
+  removes its temp dir). No-op when none is running.
+* `llm-accept` — select the accumulated ghost-text span (start → anchor) and
+  deactivate draft tracking. Because the text was inserted as separate undo nodes,
+  this does **not** fold into one undo group: a single `undo` removes only the last
+  delta. It repositions the cursor; it does not insert or delete text. No-op when no draft is active.
+* `llm-reject` — erase the accumulated ghost-text span with a single
+  `execute-keys d`, so a single `undo` restores it. No-op when no draft is active.
+* `llm-approve` — confirm control_request approvals buffered by the detached
+  tailer during the current session: writes a `confirmation_response` for each
+  pending request_id to the `--input-file` channel and clears the pending buffer.
+  No-op when nothing is pending (safe to register unconditionally).
+
+  By default the tailer does NOT auto-approve control requests: it buffers
+  each request_id and emits a single status-line summary listing the pending ids,
+  so you know exactly what `:llm-approve` will confirm. Set the option below to
+  restore immediate auto-approval for sessions whose model you trust.
+
+(Internal commands `llm-append-delta`, `llm-draft-clear`, and `llm-tail-loop` are
+hidden; they own the escaping, drift tracking, span accumulation, and FIFO tailing.)
+
+* `llm-tail-loop` — detached POSIX tailer (uses `jq` when present, else a `sed`
+  fallback) that reads the session's `events.jsonl` FIFO line by line, classifies
+  each event (`content_block_delta`, `control_request`, `session_start`), and
+  dispatches `content_block_delta` to `llm-append-delta` as a single base-64
+  argument. It enforces the drift stop-file (`[ -s ]` check) that tears the stream
+  down on cursor drift, buffers pending control-request ids when
+  `llm_auto_approve_control` is false, and performs the EOF teardown (via
+  `llm-stop`) when Qwen exits.
+
+  NOTE: `llm-tail-loop` is launched from `llm-session` for interactive sessions
+  where the Kakoune session is reachable via `kak -p` and the command is not
+  `mock-qwen`. It is skipped for headless sessions or `mock-qwen` to avoid FIFO
+  contention with the test harness. When launched, the tailer runs detached via
+  `setsid` and streams `content_block_delta` to `llm-append-delta` via the daemon
+  delivery path.
+
+Recommended (documented only, NOT auto-bound to avoid key conflicts):
+
+    map global user a ':<space>llm-accept<ret>'   # commit ghost text
+    map global user A ':<space>llm-reject<ret>'   # discard ghost text
+
+[_options]
+== Options
+
+* `llm_cmd` (str, default `qwen`) — shell command used to launch the Qwen Code
+  LLM.
+* `llm_model` (str, default empty) — Qwen Code model to use; when set, `--model
+  <value>` is prepended to the argument list.
+* `llm_args` (str-list, default empty) — extra arguments appended to `$llm_cmd`
+  (e.g. `--temperature`, `--max-length`).
+* `llm_auto_approve_control` (bool, default `false`) — auto-approve
+  `control_request` prompts without per-request user confirmation. When
+  false the tailer buffers requests and requires `:llm-approve`; when true the
+  tailer writes `confirmation_response` immediately.
+
+* `llm_prompt_timeout` (int, default `3`) — timeout seconds for prompt derivation
+  `kak -p` calls.
+* `llm_liveness_retries` (int, default `5`) — retries for Qwen liveness check.
+* `llm_liveness_delay` (str, default `0.05`) — delay seconds between liveness
+  retries.
+* `llm_daemon_timeout` (int, default `5`) — timeout seconds for daemon `kak -p`
+  writes.
+
+These are declared inside the module body, so they only exist after
+`:require-module llm` runs (wired to `KakBegin` for the whole session).
+
+== Required Kakoune command surface
+
+The module's `evaluate-commands` bodies issue these Kakoune commands on a
+standard build (see `rc/tools/llm.kak` for the exact call sites):
+
+* `select L.C,L.C` — absolute-range `select` in **dot** coordinate format (line.column).
+  Used by `llm-accept` and `llm-reject`. `llm-accept` issues it directly from the
+  stored coords (`${llm_draft_start}` → `${llm_draft_anchor}`); it repositions the
+  cursor and selects the span without inserting or deleting text.
+* `execute-keys d` — erase the selected span in a single undo node (used by
+  `llm-reject` only). `llm-accept` does **not** issue this.
+* `execute-keys -draft i<text><esc>` — insert one streaming token as committed,
+  un-grouped ghost text; used by `llm-append-delta`. Each token is delivered as
+  one such command, so the ghost text accumulates as separate undo nodes and a
+  single `undo` removes only the last delta (see `llm-accept`).
+* `write -force <path>` — snapshot the current buffer to a temp file; used by
+  `llm-append-delta` (on the first delta) and by `llm-reject` to capture a
+  pre-draft baseline so the reject erase span can be derived byte-exactly.
+
+`evaluate-commands`, `set-option`, and `printf`/`awk` are also required, but are present
+on every standard build.
+
+`llm-accept` performs only the absolute-range `select`. `llm-reject` derives the exact
+byte-exact erase span with `awk` from a fresh pre-draft snapshot of the buffer
+(needed because the end coordinate differs across lines — same-line spans use
+`a_col-1`; when the anchor sits at column 1 of a later line the last ghost byte is
+the newline at the end of the previous line). It then issues that `select` plus
+`execute-keys d`.
+
+== Build requirement (IMPORTANT)
+
+The module assumes a **standard / upstream Kakoune** command surface. It has NOT
+been verified against, and does not run on, stripped builds that omit any of the
+commands above.
+
+=== Validation procedure (standard Kakoune)
+
+Run these on a **standard Kakoune** build:
+
+1. Confirm the required commands resolve (headless, no "no such command"):
+
+       kak -n -ui json -e 'select 1.1,1.1'
+       kak -n -ui json -e 'execute-keys d'
+       kak -n -ui json -e 'execute-keys -draft iX<esc>'
+       kak -n -ui json -e 'write -force /tmp/llm-validate.txt'
+
+   Each must exit 0. These are the exact commands the module issues: dot-coordinate
+   absolute-range `select` (`llm-accept` / `llm-reject`), `execute-keys d`
+   (`llm-reject`), `execute-keys -draft i<text><esc>` (`llm-append-delta`), and a
+   `write -force` snapshot (`llm-append-delta` first delta / `llm-reject`).
+
+2. Load the module and drive a real stream:
+
+       kak -ui normal            # a real pty/interactive session (see caveat)
+       :require-module llm
+       :llm-session "<prompt>"
+
+3. When ghost text accumulates, commit / discard:
+
+       :llm-accept<ret>    # select the span (no buffer change; cursor repositioned)
+       :llm-reject<ret>    # erases the span (one undo restores it)
+
+   Verify `llm-accept` selects the accumulated span without inserting or deleting
+   text, and `llm-reject` erases it — a single `undo` restores the erased span.
+
+NOTE: Kakoune headless mode (`-ui json`, `-n`) cannot surface runtime output —
+the *absence/presence* of a command can be confirmed headless (step 1), but the
+select/erase *result* must be visually confirmed in an interactive pty session
+(step 3).

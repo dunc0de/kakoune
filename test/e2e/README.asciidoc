@@ -1,0 +1,151 @@
+End-to-end harness for +rc/tools/llm.kak+
+==========================================
+
+These tests exercise the real Kakoune LLM module (+rc/tools/llm.kak+) under a
+headless +{-ui json}+ session, driving the +:llm-*+ commands over stdin
+JSON-RPC and asserting on on-disk state. They require *no network access*:
++mock-qwen.sh+ is a deterministic stand-in for the Qwen Code CLI that speaks
+exactly the contract +llm-session+ relies on.
+
+Layout
+------
+
+[cols="1,2"]
+|===
+| File | Role
+
+| +e2e_driver.py+
+| Launches +kak -ui json+, sources +llm.kak+ wired to the shim, and runs a
+scenario by driving keys over stdin JSON-RPC.
+
+| +mock-qwen.sh+
+| Deterministic shim emitting +session_start+ / +content_block_delta+ /
++control_request+ events over an event FIFO.
+
+| +run.sh+
+| Runs every scenario against +src/kak+ (or +$KAK_BIN+).
+|===
+
+Scenarios
+---------
+
+- *accept* — stream tokens, +:llm-accept+, quit; the ghost-text span must
+  persist to the target file.
+- *reject* — stream tokens, +:llm-reject+, quit; the buffer must be unchanged.
+- *control* — emit a +control_request+, approve it via +:llm-approve+, then
+  accept; verifies the approval round-trip writes +confirmation_response+ to the
+  input channel and clears the pending-control buffer before tokens are
+  accepted.
+- *stop* — stream tokens, +:llm-stop+; the per-session temp dir must be
+  removed and the shim's process group killed.
+
+Prerequisites
+-------------
+
+A freshly built Kakoune binary at +src/kak+:
+
+----
+make
+----
+
+NOTE: The repo ships with no prebuilt binary; the harness refuses to run against a
+stale or missing +KAK_BIN+.
+
+Running
+-------
+
+----
+# All scenarios against src/kak
+./test/e2e/run.sh
+
+# A single scenario
+E2E_SCENARIO=accept ./test/e2e/run.sh
+
+# A custom binary
+KAK_BIN=/path/to/kak ./test/e2e/run.sh
+----
+
+Each scenario prints +PASS: <scenario> — <detail>+ on success and exits non-zero
+on failure, so it drops cleanly into CI.
+
+Environment variables
+---------------------
+
+[cols="1,1,2"]
+|===
+| Variable | Default | Meaning
+
+| +KAK_BIN+
+| +src/kak+
+| Kakoune binary to launch.
+
+| +E2E_SCENARIO+
+| *(required)*
+| One of +accept+, +reject+, +control+, +stop+.
+
+| +E2E_TOKENS+
+| +Hello,world+
+| Comma-separated tokens the shim streams.
+
+| +E2E_DELAY+
+| +0.05+
+| Seconds between streamed tokens.
+
+| +E2E_CONTROL_REQUEST+
+| *(empty)*
+| When set, the shim emits a control request with this id.
+
+| +E2E_WORKDIR+
+| +/tmp/e2e-<scenario>-<pid>+
+| Scratch dir for the target file.
+|===
+
+How it works
+------------
+
+1. +KakHarness.start()+ spawns +kak -ui json -s <session> -E ""+ with
+   stdin/stdout/stderr piped and drained on background threads.
+2. The driver waits for the readiness signal (+set_ui_options+), then sources
+   +llm.kak+ pointing at +mock-qwen.sh+ via the +--llm-cmd+ / +-str-list
+   llm_args+ options.
+3. Each streamed +content_block_delta+ is base64-encoded by the harness and
+   dispatched as +:llm-append-delta '<b64>'+ over a stdin JSON-RPC +keys+
+   request, running Kakoune's own chain (base64-decode → awk-escape →
+   grep-guard → cursor-drift → literal insert) exactly as the production tailer
+   does. The scenario then drives keys (+:edit+, +:llm-session+,
+   +:llm-accept+, …) and waits for each state transition
+   (+llm session started+, +llm_draft_active+, pending-control buffer, process
+   exit).
+4. Assertions compare the target file's contents / the per-session temp dir
+   against expectations.
+
+Notes
+-----
+
+- +mock-qwen.sh+ uses exact-case argv matching (+--tokens VALUE+, never
+  +--tokens=VALUE+), so tokens are passed as separate argv elements by the
+  driver — see the comment in +main()+.
+- The harness reads the shim's events FIFO directly from Python
+  (+stream_deltas+) rather than via a detached tailer or +%opt{}+ polling.
+  Token deltas flow through the real +:llm-append-delta+ command; only the span
+  *bracket* for accept/reject emulation is captured in Python via
+  +%val{cursor_line/cursor_column}+ echoes (which succeed synchronously after
+  each delta commits), so that acceptance comparison needs no extra Kakoune
+  round-trip.
+
+Known limitations
+-----------------
+
+- FIFO open race: The shim's `exec 4>"$JSON_FILE"` blocks until a reader connects.
+  Pre-opening the events FIFO before launching the shim mitigates this, but a
+  crashed driver leaves the shim hanging with no timeout.
+- Unix-only process management: `os.killpg` and `setsid` assume a POSIX process
+  group model; Windows is unsupported.
+- Historical accept/reject emulation: Prior to this hardening, accept/reject were
+  emulated via `evaluate-commands`. The harness now invokes real `:llm-accept`/
+  `:llm-reject`.
+- Resource cleanup: File descriptors for the events FIFO are closed on
+  `KakHarness.close()`.
+- See wiki observations:
+  [[sources/obs-2026-10-08-e2e-harness-bypasses-real-llm-append-delta-code-path]]
+  [[analyses/e2e-harness-and-llmkak-staged-review-critical-kaksend-bug-6-agent-findings]]

@@ -129,6 +129,9 @@ define-command -params ..1 -docstring %{
         # (Qwen transport guidance: per-session paths under a 0700'd directory).
         dir=$(mktemp -d "${TMPDIR:-/tmp}"/kak-llm.XXXXXXXX)
         chmod 0700 "${dir}"
+        # Create .dbg for test harness visibility (guard passed + body started)
+        printf 'guard passed\n' > "${dir}/.dbg"
+        printf 'body started\n' >> "${dir}/.dbg"
         json_file="${dir}/events.jsonl"   # --json-file (FIFO: single writer=Qwen, single reader=tailer; clean EOF when Qwen exits)
         input_file="${dir}/input.jsonl"   # --input-file (regular file: Qwen reads it while we append
                                           #   confirmation responses — a FIFO would block concurrent access)

@@ -54,6 +54,12 @@ main() {
     cp in cmd rc env $work/$dir/ 2>/dev/null
     cd $work/$dir;
 
+    # Capture file for llm-append-delta's fail-closed guard messages. Exported
+    # so both the kak server (whose %sh{} layer writes '{Error}' here) and the
+    # test script (which greps it) agree on the path.
+    export LLM_GUARD_ERR_FILE="$work/$dir/guard-err"
+    rm -f "$LLM_GUARD_ERR_FILE"
+
     mkfifo ui-in ui-out
     touch in; cp in out
     rm -f "$session_path"

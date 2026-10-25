@@ -544,11 +544,20 @@ define-command -hidden -params ..1 -docstring %{
             exit 0
         fi
 
-        # --- Cursor-drift validation disabled due to async anchor update race ---
-        # Anchor is updated asynchronously via kak_send; the next delta can see a stale anchor
-        # and be dropped. Drift validation is intentionally fail-closed for now to avoid false
-        # negatives until anchor delivery is synchronous.
+        # --- Cursor-drift validation ---
         active="${kak_opt_llm_draft_active}"
+        # If a draft is active, the next delta must be inserted at the anchor.
+        # If the cursor has drifted, drop the delta (fail-closed).
+        if [ "${active}" = "true" ]; then
+            anchor="${kak_opt_llm_draft_anchor}"
+            if [ -n "${anchor}" ]; then
+                IFS=','; set -- ${anchor}; a_line=$1; a_col=$2; IFS=' '
+                if [ "${kak_cursor_line}" != "${a_line}" ] || [ "${kak_cursor_column}" != "${a_col}" ]; then
+                    # Cursor drift detected: drop delta fail-closed.
+                    exit 0
+                fi
+            fi
+        fi
         # First delta of the stream initialises start/activate/snapshot. Use
         # kak_send because evaluate-commands %sh{} stdout is NOT re-parsed in this
         # build (probe23), so Kakoune commands must be sent via kak -p.

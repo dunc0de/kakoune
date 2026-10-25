@@ -158,7 +158,7 @@ llm_session_run() {
 # at a dead setsid PID; the live mock-llm carries its FIFO dir on its command
 # line, so we derive the real PID (and thus its process group) from that.
 llm_session_state() {
-  llm_session_dir=$(grep -oE "set-option global llm_dir '[^']*'" "$LLM_SESSION_DIR/session.out" 2>/dev/null \
+  llm_session_dir=$(grep -oE "set-option global llm_dir '[^']*'" "$LLM_SESSION_DIR/calls.log" 2>/dev/null \
     | sed "s/.*'\([^']*\)'.*/\1/" | head -1)
   llm_session_stop_file="${llm_session_dir}/stop"
   # setsid's own cmdline also carries the dir, so match only the real mock-llm
@@ -166,18 +166,18 @@ llm_session_state() {
   _llm_dir_re=$(printf '%s' "$llm_session_dir" | sed 's/[.[\*^$+?()]/\\&/g')
   llm_session_pid=$(pgrep -f "/mock-llm --json-file.*${_llm_dir_re}/events.jsonl" 2>/dev/null | head -1)
   if [ -z "$llm_session_pid" ]; then
-    llm_session_pid=$(grep -oE "set-option global llm_pid [0-9]+" "$LLM_SESSION_DIR/session.out" 2>/dev/null \
-      | awk '{print $4}' | head -1)
+    llm_session_pid=$(grep -oE "set-option global llm_pid '[^']*'" "$LLM_SESSION_DIR/calls.log" 2>/dev/null \
+      | sed "s/.*'\([^']*\)'.*/\1/" | head -1)
   fi
 }
 
-# Assert that the launcher's stdout (session.out) contains PATTERN.
+# Assert that the launcher's calls.log contains PATTERN.
 llm_session_out() {
-  if grep -q "$1" "$LLM_SESSION_DIR/session.out" 2>/dev/null; then
+  if grep -q "$1" "$LLM_SESSION_DIR/calls.log" 2>/dev/null; then
     echo "lifecycle-session: PASS ($1)"
   else
     echo "lifecycle-session: FAIL ($1)" >&2
-    echo "  out: $(cat "$LLM_SESSION_DIR/session.out" 2>/dev/null || echo EMPTY)" >&2
+    echo "  calls: $(cat "$LLM_SESSION_DIR/calls.log" 2>/dev/null || echo EMPTY)" >&2
     return 1
   fi
 }

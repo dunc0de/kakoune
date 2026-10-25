@@ -1,0 +1,142 @@
+= ghost module
+
+// Companion documentation for rc/tools/ghost.kak (WebSocket bridge for
+// streaming ghost-text from the ghost-text-agent repo as inline ghost text).
+// This file documents the module's user-facing surface (options + commands),
+// its wire protocol, and its validation procedure. It is intentionally
+// separate from ghost.kak so the module source is not cluttered with
+// environment-specific notes.
+
+== Purpose
+
+rc/tools/ghost.kak streams per-token ghost text from the ghost-text-agent
+WebSocket bridge into the editor as inline ghost text, and sends user control
+frames (ACCEPT/REJECT/PAUSE/START/STOP) back to the bridge. It is configured
+through four user-facing options (see <<_options>>) and exposes these
+user-facing commands:
+
+* `ghost-session [<ws-url>]` — start a detached WebSocket tailer
+  (`rc/tools/ghost_ws.py`) for the bridge at `ws-url` (default: `$ghost_ws_url`).
+  The bridge must already be running; this command never starts it.
+  Generates a session id and binds the Kakoune channel to the bridge on the
+  first `user_control START` frame.
+* `ghost-stop` — stop the running ghost session (graceful SIGTERM, then SIGKILL),
+  remove its scratch dir, and clear state options. No-op when none is running.
+* `ghost-control <ACCEPT|REJECT|PAUSE|START|STOP>` — append a JSON control
+  line to the per-session `control.jsonl` file; the tailer polls it and ships
+  the frame to the bridge. `STOP` also tears down the session.
+* `ghost-accept` — select the accumulated ghost-text span (start → anchor) and
+  deactivate draft tracking. The text was inserted as separate undo nodes, so
+  a single `undo` removes only the last delta. It repositions the cursor; it
+  does not insert or delete text. No-op when no draft is active.
+* `ghost-reject` — erase the accumulated ghost-text span with a single
+  `execute-keys d`, so a single `undo` restores it. No-op when no draft is active.
+
+Internal commands `ghost-append-delta`, `ghost-draft-clear` are hidden; they
+own the base64 decode, Kak key-layer escaping, fail-closed injection guard,
+span accumulation, and draft state teardown.
+
+Recommended (documented only, NOT auto-bound). CAUTION: the user layer is
+checked before the builtin layer, so `map global user a` would shadow the
+builtin `a` (append) and break normal-mode append globally; use non-
+conflicting keys instead:
+
+    map global user <a-g><a-a> ':<space>ghost-accept<ret>'   # commit ghost text
+    map global user <a-g><a-r> ':<space>ghost-reject<ret>'   # discard ghost text
+
+[_options]
+== Options
+
+* `ghost_ws_url` (str, default `ws://127.0.0.1:8080/ws`) — WebSocket URL of the
+  ghost-text bridge.
+* `ghost_ws_timeout` (int, default `5`) — timeout seconds for `kak -p`
+  dispatches from the tailer.
+* `ghost_ws_control_poll` (str, default `0.1`) — seconds between control-file
+  polls in the tailer.
+* `ghost_ws_py` (str, default empty) — path to the `ghost_ws.py` tailer
+  script; auto-set to the resolved path (normally
+  `%val{runtime}/rc/tools/ghost_ws.py`) when a session starts.
+
+Hidden per-session options (do not set manually):
+`ghost_dir`, `ghost_pid`, `ghost_session_name`, `ghost_client`,
+`ghost_session_id`, `ghost_control_file`.
+
+The draft span state itself (start/anchor/active) is NOT held in options; it
+lives in scratch-dir files (`.start`, `.anchor`, `.active`) inside `ghost_dir`
+and is torn down by the hidden `ghost-draft-clear` command. The three retired
+`ghost_draft_*` options are still declared (the regression test rc files set
+them) but are neither read nor written by the module.
+
+These are declared inside the module body, so they only exist after
+`:require-module ghost` runs (wired to `KakBegin` for the whole session).
+
+== Wire protocol
+
+Server → Client (ghost-text-agent bridge):
+
+    {"type":"ghost_text","sessionId":"<id>","token":"<delta>"}
+
+Client → Server:
+
+    {"type":"user_control","sessionId":"<id>","control":"ACCEPT|REJECT|PAUSE|START|STOP"}
+
+On connect the tailer sends `user_control START` first; the bridge binds the
+channel to that session id. All subsequent control frames carry the same id.
+`ghost_text` frames with a mismatching `sessionId` are dropped.
+
+The tailer is a Python3 stdlib RFC 6455 client: handshake with
+`Sec-WebSocket-Accept` verification, masked outgoing frames, unmasked
+incoming frames, ping/pong handling, and close handling. No external
+dependencies.
+
+== Required Kakoune command surface
+
+The module issues:
+
+* `select L.C,L.C` — absolute-range select in dot coordinate format.
+* `execute-keys d` — erase selected span in one undo node.
+* `evaluate-commands -draft %{ execute-keys '<i><text><esc>l' }` — insert the
+  streaming token as ghost text (the `-draft` flag is on `evaluate-commands`).
+* `evaluate-commands` — dispatched from the tailer via `kak -p` (delta
+  insert and session teardown).
+
+It also shells out to POSIX utilities: `base64`, `awk`, `grep`, `wc`, `mktemp`,
+`ps`, `pgrep`, `setsid`. These are present on a standard Kakoune build +
+POSIX toolchain.
+
+== Build requirement
+
+The module assumes a standard Kakoune command surface. It has not been
+verified against stripped builds that omit `select` or
+`evaluate-commands -draft`.
+
+== Validation procedure
+
+1. Confirm module loads:
+
+       kak -n -ui json -e 'source "%val{runtime}/rc/tools/ghost.kak"; require-module ghost'
+
+2. Start a local bridge (ghost-text-agent) and a Kakoune session:
+
+       :require-module ghost
+       :ghost-session ws://127.0.0.1:8080/ws
+
+   Ghost text should stream into the current buffer's `-draft` context.
+
+3. Test controls:
+
+       :ghost-control ACCEPT
+       :ghost-control REJECT
+       :ghost-stop
+
+   The bridge should receive the corresponding `user_control` frames and the
+   session state should clear.
+
+Manual e2e harness (headless, 127.0.0.1 only):
+
+       ./test/e2e/run-ghost.sh
+
+Coexistence note: `ghost.kak` is a standalone module with a disjoint
+`ghost_*` namespace. It does not modify `llm.kak`, `llm.asciidoc`,
+`Makefile`, `test/run`, `share/kak/kakrc`, or any existing test assets.
+Both modules can coexist in the same Kakoune installation.

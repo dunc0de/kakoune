@@ -1,0 +1,8 @@
+# Sourced by test/run in the subshell that launches the kak SERVER, so this
+# reaches the ghost.kak guard (which writes {Error} here when it drops a
+# payload). The fixture's `script` re-derives the same literal path for its
+# own assertion -- test/run sources env only for the server, not for the
+# outer script shell (see slice design notes). `export` is mandatory: the
+# variable must enter the environment that `exec kak` inherits, or the
+# server's %sh{} bodies see an empty value (verified empirically).
+export GHOST_GUARD_ERR_FILE="$PWD/gerr"

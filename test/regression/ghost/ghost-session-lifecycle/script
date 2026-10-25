@@ -1,0 +1,79 @@
+#!/bin/sh
+# N5 lifecycle regression: exercises the real ghost-session launcher and
+# ghost-stop teardown body (rc/tools/ghost.kak) against the mock-ghost-tailer
+# stub, asserting:
+#   (a) the tailer's process group is alive after ghost-session and gone after
+#       ghost-stop (kill -TERM/-KILL -pgid targets only the tailer's setsid
+#       group -- never the Kakoune session);
+#   (b) the per-session temp dir (ghost_dir) exists after launch and is removed
+#       after teardown;
+#   (c) the GHOST_* config vars crossed the setsid boundary (the
+#       export-before-setsid lesson; see the launcher comment in
+#       rc/tools/ghost.kak) -- the tailer's captured env file must carry the
+#       launcher's ws-url, session id, dir, and client;
+#   (d) state is recorded via kak_send (calls log): ghost_dir, ghost_pid,
+#       ghost_session_id, ghost_control_file, ghost_ws_url, ghost_ws_py + the
+#       "ghost session started" notification;
+#   (e) teardown is recorded in the calls log: ghost-draft-clear +
+#       "ghost session stopped".
+#
+# Per _ghost_body.sh, the bodies run standalone (setsid) with the exact env
+# vars production passes, exercising identical code: their internal kak_send
+# dispatches are stubbed to a calls log (via _ghost_body_extract.py) so emitted
+# commands are observable without dispatching into the harness session.
+. "$root/test/regression/ghost/_ghost_body.sh"
+
+# --- launch the real ghost-session body ---
+ghost_session_run
+ghost_session_state
+
+# Negative control: before stop the tailer PGID is alive and the dir exists.
+if [ -z "$ghost_session_pid" ] || [ -z "$ghost_session_dir" ] || [ -z "$ghost_session_id" ]; then
+    echo "lifecycle-state: FAIL (pid=$ghost_session_pid dir=$ghost_session_dir id=$ghost_session_id)" >&2
+    fail_ifn
+fi
+if ! ghost_session_alive; then
+    echo "lifecycle-alive-before: FAIL (pid=$ghost_session_pid not alive)" >&2
+    fail_ifn
+fi
+if ! ghost_session_dir_exists; then
+    echo "lifecycle-dir-before: FAIL (dir=$ghost_session_dir missing)" >&2
+    fail_ifn
+fi
+
+# (c) config crossed the setsid boundary into the tailer's environment.
+ghost_session_env "GHOST_WS_URL=$GHOST_WS_URL"
+ghost_session_env "GHOST_SESSION_ID=$ghost_session_id"
+ghost_session_env "GHOST_DIR=$ghost_session_dir"
+ghost_session_env "GHOST_CLIENT=$GHOST_CLIENT"
+ghost_session_env "kak_session=kak-tests"
+
+# (d) state recorded on the calls log by the launcher body (kak_send).
+ghost_session_out "set-option global ghost_dir"
+ghost_session_out "set-option global ghost_pid"
+ghost_session_out "set-option global ghost_session_id"
+ghost_session_out "set-option global ghost_control_file"
+ghost_session_out "set-option global ghost_ws_url"
+ghost_session_out "set-option global ghost_ws_py"
+ghost_session_out "ghost session started"
+
+# --- teardown via the real ghost-stop body ---
+ghost_stop_run
+
+# (a) tailer process group gone after stop.
+if ghost_session_alive; then
+    echo "lifecycle-alive-after: FAIL (pid=$ghost_session_pid still alive)" >&2
+    fail_ifn
+fi
+
+# (b) per-session temp dir removed after teardown.
+if ghost_session_dir_exists; then
+    echo "lifecycle-dir-after: FAIL (dir=$ghost_session_dir still exists)" >&2
+    fail_ifn
+fi
+
+# (e) teardown recorded in the calls log.
+ghost_session_calls "ghost-draft-clear"
+ghost_session_calls "ghost session stopped"
+
+echo "lifecycle: PASS"

@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+# Mock ghost WS tailer for regression tests. Stands in for the production
+# `python3 ghost_ws.py` tailer, which the launcher runs as
+# `exec setsid python3 <ws_py>` -- so this stub MUST be valid Python (a shell
+# script here would crash under the launcher's python3 invocation, exactly the
+# failure this guard exists to catch).
+#
+# Contract the lifecycle test relies on: read the GHOST_* config the launcher
+# exported across the setsid boundary, write it to <GHOST_DIR>/.tailer.env
+# (the assertion that the export crossed the boundary -- the
+# export-before-setsid lesson; see the launcher comment in rc/tools/ghost.kak),
+# record this process's own PID to <GHOST_DIR>/.tailer.pid (the
+# launcher's recorded ghost_pid is the setsid child, not necessarily this
+# process, so the harness reads the real liveness target from here), then stay
+# alive as a live process group until SIGTERM/SIGKILLed -- exactly what
+# ghost-stop's real graceful teardown needs to observe.
+#
+# GHOST_DIR is the scratch dir the launcher exports across the setsid
+# boundary. Env is the ONLY source -- the launcher's setsid line
+# (`exec setsid python3 <ws_py>`) passes no arguments.
+import os
+import signal
+import sys
+import time
+
+# Ignore SIGPIPE: the production tailer inherits the launcher's fds, and a
+# write to a closed pipe must not kill it mid-loop.
+signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+
+dir = os.environ.get("GHOST_DIR", "")
+if not dir:
+    sys.stderr.write("mock-ghost-tailer: GHOST_DIR (env) required\n")
+    sys.exit(1)
+
+# Record the config the launcher exported -- this IS the assertion that the
+# env vars crossed the setsid boundary.
+fields = (
+    "GHOST_WS_URL",
+    "GHOST_SESSION_ID",
+    "GHOST_DIR",
+    "GHOST_CLIENT",
+    "kak_session",
+)
+with open(os.path.join(dir, ".tailer.env"), "w") as env_file:
+    for name in fields:
+        env_file.write(f"{name}={os.environ.get(name, '')}\n")
+
+# Record this mock's OWN pid for the harness's liveness check and process-group
+# kill (pid == pgid after the launcher's setsid+exec).
+with open(os.path.join(dir, ".tailer.pid"), "w") as pid_file:
+    pid_file.write(f"{os.getpid()}\n")
+
+# Stay alive until killed (mirrors the real tailer's poll loop). A short sleep
+# keeps the process responsive to signals; the loop is the liveness the test
+# observes between ghost-session and ghost-stop.
+while True:
+    time.sleep(0.1)

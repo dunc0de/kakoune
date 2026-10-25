@@ -1,0 +1,48 @@
+#!/bin/sh
+# Guard regression: reject command/metacharacter injection AND assert the
+# guard's fail-closed `{Error}` message is observable.
+#
+# Payload (base64-encoded):  x;%sh{date>MARKER_PROOF}
+#   - ';'  -> command grouping / chaining
+#   - '%'  -> parameter expansion / %sh{}
+#
+# The rc fixture sets up the full append environment (ghost_dir, ghost_client,
+# draft state) so that WITHOUT the guard the payload would be appended as
+# literal buffer text via the draft insert path.
+#
+#   guard present -> payload rejected BEFORE insertion -> buffer unchanged -> pass
+#   guard absent  -> payload appended as text      -> buffer has '%sh{...}'   -> fail
+#
+# Gate (a): buffer stays empty WITH guard (payload never inserted) -- enforced
+#           by the harness's generated-out comparison: the live buffer is only
+#           written to `out` in finished_commands, AFTER this script runs, so
+#           the script itself cannot grep it (the workdir `out` is still the
+#           pristine copy of `in` here).
+# Gate (b): literal `{Error}` observable in the capture file. Kakoune's `-ui
+#           json` stream does not capture status-line echoes, so the file is
+#           the deterministic channel -- this independently catches a broken
+#           delivery path that silently swallowed the error.
+#           Path derivation: the fixture `env` file feeds GHOST_GUARD_ERR_FILE
+#           to the kak SERVER (the writer); test/run sources env only in the
+#           server-launch subshell, so THIS script re-derives the same literal
+#           path ($PWD is the per-test work dir in both contexts).
+# NOTE: a marker-file approach was rejected up front: appending text does not
+# execute %sh{}, so no marker is created regardless of the guard -- it would
+# pass whether or not the guard exists. Buffer content is the real
+# discriminator.
+KAK="$kak"
+errfile="$PWD/gerr"
+PAYLOAD='x;%sh{date>MARKER_PROOF}'
+B64=$(printf '%s' "$PAYLOAD" | base64)
+rm -f "$errfile"
+
+# Fire the guard with an injection payload.
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 ghost-append-delta $B64
+EOF
+sleep 0.3
+
+# Gate (b): literal `{Error}` observable via the capture file. (Gate (a) --
+# buffer stays empty -- is enforced by the harness's out comparison after this
+# script runs; see the note above.)
+if ! grep -q '{Error}' "$errfile" 2>/dev/null; then fail_ifn; fi

@@ -1,0 +1,11 @@
+source "%val{runtime}/rc/tools/ghost.kak"
+require-module ghost
+set global ghost_client client0
+set global ghost_draft_active true
+set global ghost_draft_start "1 1"
+set global ghost_draft_anchor "1 1"
+# ghost-append-delta writes its draft state files (and the pre.txt commit
+# marker) into ghost_dir on the insert path; needs a writable dir for the
+# guard-absent path to actually insert the payload (otherwise it errors
+# before inserting).
+set global ghost_dir /tmp/ghost-inj-guard

@@ -1,0 +1,23 @@
+#!/bin/sh
+KAK="$kak"
+# Cross-line-anchor reject (a_col==1): the staged draft span runs 1.3 -> 2.1,
+# so its last byte is the trailing newline of line 1. ghost-reject derives the
+# erase span purely from the stored .start/.anchor files (no buffer snapshot,
+# no awk -- see rc/tools/ghost.kak): with a_col==1 it selects to the clamped
+# end of line a_line-1 (1.999999), erasing "BAR y" + the newline but NOT the
+# "f" at 2.1 -> "x foo". The state files are pre-staged to simulate the
+# stream. (The fixture name predates the awk rewrite: "else-branch" is the
+# old awk's branch that the current shell `elif [ a_col = 1 ]` supersedes.)
+D=/tmp/ghost-test
+mkdir -p "$D"
+printf 'true' > "$D/.active"
+printf '1 3' > "$D/.start"
+printf '2 1' > "$D/.anchor"
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 ghost-reject
+EOF
+# Correctness enforced by the harness's generated-out comparison against this
+# dir's `out` (= "x foo"). The harness writes the final buffer to `out` in
+# finished_commands; no in-script capture is used (%val{bufcontent} does not
+# exist in Kakoune).
+sleep 0.3

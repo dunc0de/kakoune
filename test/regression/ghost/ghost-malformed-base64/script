@@ -1,0 +1,9 @@
+#!/bin/sh
+KAK="$kak"
+# Invalid base64 -> empty delta -> nothing inserted, no crash.
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 ghost-append-delta !!!not-base64!!!
+EOF
+sleep 0.3
+# Correctness enforced by the harness's generated-out comparison (bufcontent is
+# undefined in Kakoune). Malformed input must not corrupt the buffer or crash.

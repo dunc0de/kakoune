@@ -1,0 +1,21 @@
+#!/bin/sh
+KAK="$kak"
+# Cross-line (a_col==1) reject regression (F3): the ghost ends at a newline
+# boundary so its last byte is the newline at the end of line 1. The erase span
+# is derived from the stored .start/.anchor files (the anchor is rewritten on
+# EVERY delta, so the state is never stale -- and NO live-buffer snapshot is
+# taken; that approach raced the kak -p queue and was removed, see
+# rc/tools/ghost.kak), and with a_col==1 must erase to the clamped end of line
+# 1 (1.999999) without swallowing the "b" at 2.1. `in` already carries the ghost
+# bytes ("XYZ\n") at the span start/anchor bracket, exactly as the live stream
+# leaves them, so reject+u must restore the original exactly.
+D=/tmp/ghost-reject-cl-test
+mkdir -p "$D"
+printf 'true' > "$D/.active"
+printf '1 4' > "$D/.start"
+printf '2 1' > "$D/.anchor"
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 ghost-reject
+execute-keys -client client0 u
+EOF
+sleep 0.5

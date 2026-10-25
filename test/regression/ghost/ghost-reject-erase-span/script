@@ -1,0 +1,20 @@
+#!/bin/sh
+KAK="$kak"
+# Same-line reject: the ghost span (start 1.3 -> anchor 1.6) sits on one line,
+# so ghost-reject erases columns 3..5 ("BAR") in one `d`; one `u` restores the
+# original buffer (out = "x  y"). The state files are pre-staged to simulate
+# the stream (the scratch dir is the ghost_dir set by this fixture's rc file).
+# Correctness is enforced by the harness's generated-out comparison -- it
+# writes the final buffer to `out` in finished_commands, after this script
+# runs; no in-script capture is used (%val{bufcontent} does not exist in
+# Kakoune).
+D=/tmp/ghost-reject-erase-test
+mkdir -p "$D"
+printf 'true' > "$D/.active"
+printf '1 3' > "$D/.start"
+printf '1 6' > "$D/.anchor"
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 ghost-reject
+execute-keys -client client0 u
+EOF
+sleep 0.2

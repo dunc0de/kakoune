@@ -1,0 +1,23 @@
+#!/bin/sh
+# Verify `ghost-accept` produces the expected buffer (`out`).
+#
+# NOTE: this script must not read `%val{bufcontent}` — Kakoune defines no such
+# value, so a capture line like
+#     echo -to-file out -- %val{bufcontent}
+# would error ("no such variable: bufcontent") before the harness runs its
+# `write -force` comparison against this dir's `out`. The harness's built-in
+# `out` comparison is the real assertion here.
+KAK="$kak"
+D=/tmp/ghost-accept-select-test
+mkdir -p "$D"
+printf 'true' > "$D/.active"
+printf '1 3' > "$D/.start"
+printf '1 6' > "$D/.anchor"
+$KAK -p kak-tests <<EOF
+evaluate-commands -client client0 ghost-accept
+EOF
+# ghost-accept applies the span via a second, asynchronous kak_send dispatch
+# (command dispatch -> %sh -> select). 0.2s was not a reliable upper bound for
+# that double dispatch, so the harness occasionally captured the pre-select
+# buffer (1.1,1.1) and the fixture flaked. 0.5s covers the double hop.
+sleep 0.5

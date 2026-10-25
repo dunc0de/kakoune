@@ -47,7 +47,7 @@ provide-module llm %{
 
     # Ghost-text draft state (cursor-drift tracking + span accumulation). Declared hidden;
     # owned by llm-append-delta and consumed by llm-accept / llm-reject.
-    #   llm_draft_start : coord (line<space>column) where the draft ghost text begins
+    #   llm_draft_start : coord (line,column) where the draft ghost text begins
     #                     (span start for accept/reject).
     #   llm_draft_anchor: coord where the NEXT delta must insert (== end of accumulated
     #                     ghost text); the drift reference, updated after each insert.
@@ -556,7 +556,7 @@ define-command -hidden -params ..1 -docstring %{
         # POSIX `if [ ]` works.
         # Atomic first-delta init: mkdir is atomic, so only one %sh{} process wins.
         if mkdir "${kak_opt_llm_dir}/.pre_init_lock" 2>/dev/null; then
-            kak_send "set-option global llm_draft_start '${kak_cursor_line} ${kak_cursor_column}'"
+            kak_send "set-option global llm_draft_start '${kak_cursor_line},${kak_cursor_column}'"
             kak_send "set-option global llm_draft_active true"
             # pre.txt is a client-bound buffer snapshot for llm-reject span math.
             # Must be created in the same client context; stale snapshot yields wrong erase span.
@@ -566,7 +566,7 @@ define-command -hidden -params ..1 -docstring %{
         # Insert the escaped delta directly, avoiding %opt{} expansion race.
         # Also update the draft anchor in the same draft context so the cursor position
         # is read from the draft context, not the original context.
-        kak_send "execute-keys -draft '<i>${esc}<esc>'; set-option global llm_draft_anchor '%val{cursor_line} %val{cursor_column}'"
+        kak_send "execute-keys -draft '<i>${esc}<esc>'; set-option global llm_draft_anchor '%val{cursor_line},%val{cursor_column}'"
     }
     # The draft insert and anchor update are now performed via kak_send above, so we
     # only need to yield to let Kakoune process the draft commit before the harness
@@ -634,10 +634,9 @@ define-command -docstring %{
             kak_send "llm-draft-clear"
             exit 0
         fi
-        # Split the stored "line column" coords with POSIX word-splitting (no
-        # external awk) — the %sh body runs in /usr/bin/sh (see file header).
-        set -- ${start}; s_line=$1; s_col=$2
-        set -- ${anchor}; a_line=$1; a_col=$2
+        # Split the stored "line,column" coords.
+        IFS=','; set -- ${start}; s_line=$1; s_col=$2; IFS=' '
+        IFS=','; set -- ${anchor}; a_line=$1; a_col=$2; IFS=' '
         kak_send "evaluate-commands -client ${kak_opt_llm_client} %{
             select ${s_line}.${s_col},${a_line}.${a_col}
         }"
@@ -666,8 +665,8 @@ define-command -docstring %{
             kak_send "llm-draft-clear"
             exit 0
         fi
-        set -- ${start}; s_line=$1; s_col=$2
-        set -- ${anchor}; a_line=$1; a_col=$2
+        IFS=','; set -- ${start}; s_line=$1; s_col=$2; IFS=' '
+        IFS=','; set -- ${anchor}; a_line=$1; a_col=$2; IFS=' '
         # Fresh snapshot: capture the CURRENT buffer so the erase-span
         # line-length math below reflects live state regardless of accumulated
         # content. pre.txt is only ever read here, so one snapshot per

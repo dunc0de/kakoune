@@ -85,9 +85,10 @@ hook -once global KakBegin .* %{ require-module llm }
 hook -once global KakEnd .* %{ llm-stop }
 
 define-command -params ..1 -docstring %{
-    llm-session: launch Qwen Code detached (Dual Output) for inline streaming completions.
-    An optional prompt is delivered once via Qwen's own stdin (--prompt); the --input-file
-    control channel stays available for later submit/confirmation_response round-trips.
+    llm-session [<prompt>]: launch Qwen Code detached (Dual Output) for inline streaming
+    completions. An optional <prompt> is passed via the --prompt flag so Qwen has
+    non-empty startup content; the --input-file control file stays available for later
+    submit/confirmation_response round-trips once the session is alive.
 } llm-session %{
     # Resolve the live session/client names OUTSIDE %sh{}: these two
     # `set-option` lines are real Kakoune commands, so %val{session} /
@@ -148,7 +149,7 @@ define-command -params ..1 -docstring %{
         # llm-append-delta writes it non-empty on sustained cursor drift; the tailer's
         # `[ -s ]` check (llm-tail-loop) breaks the loop, stopping the stream.
         : > "${dir}/stop"
-        # Emit as a Kakoune command via kak_send (evaluate-commands %sh{} stdout is not re-parsed).
+        # Emit as a Kakoune command via kak_send.
         kak_send "set-option global llm_stop_file '${dir}/stop'"
 
         # Shared teardown helper for the post-setup failure paths below. Each
@@ -277,13 +278,12 @@ define-command -params ..1 -docstring %{
             fail "echo 'fail Qwen did not start (pid ${qpid} not alive)'"
         fi
 
-        # NOTE: the initial prompt is delivered to real Qwen via --prompt above,
-        # NOT via the --input-file "submit" channel — empirically only --prompt
-        # reaches Qwen's stdin; the submit path never kept a live session. The
-        # control channel (--input-file) stays available for later
-        # submit/confirmation_response round-trips once a session is running.
+        # NOTE: the initial prompt is delivered via --prompt above, NOT via the
+        # --input-file "submit" path — empirically only --prompt reaches Qwen's
+        # stdin; the submit path never kept a live session. The control file
+        # (--input-file) stays available for later submit/confirmation_response
+        # round-trips once a session is running.
 
-        # Emit the Kakoune commands that record state and notify the user.
         # Record the launching client FIRST: the detached tailer inherits its own
         # -client (from the -p connection). Using that for write-back would render
         # ghost text in an invisible client, so we record the real launching client
@@ -348,6 +348,8 @@ define-command -params ..1 -docstring %{
 # can never be Kakoune's, so Kakoune is unaffected.
 define-command -docstring %{
     llm-stop: stop the running Qwen Code session and remove its temp dir (no-op if none running).
+    Kills Qwen's process group with SIGKILL, removes the per-session FIFOs + input file,
+    and clears ghost-text draft state.
 } llm-stop %{
     evaluate-commands %sh{
         kak_send() { printf '%s\n' "$1" | kak -p "${kak_session}"; }
@@ -428,7 +430,7 @@ define-command -docstring %{
 define-command -docstring %{
     llm-approve: confirm control_request approvals buffered by the detached tailer,
     writing a confirmation_response for each pending request_id to the --input-file
-    channel and clearing the pending buffer. No-op when nothing is pending.
+    control file and clearing the pending buffer. No-op when nothing is pending.
 } llm-approve %{
     evaluate-commands %sh{
         kak_send() { printf '%s\n' "$1" | kak -p "${kak_session}"; }
@@ -471,8 +473,9 @@ define-command -docstring %{
 # key layer.
 
 define-command -hidden -params ..1 -docstring %{
-    llm-append-delta <delta>: transport entry point for base64-encoded content_block_delta;
-    owns Kak key-layer escaping and fail-closed injection guard.
+    llm-append-delta [<delta>]: transport entry point for a base64-encoded
+    content_block_delta; owns Kak key-layer escaping and fail-closed injection guard.
+    Dispatched by the harness via `evaluate-commands -client <id> llm-append-delta '<b64>'`.
 } llm-append-delta %{
     # Dispatched by the harness as
     #   `evaluate-commands -client <id> llm-append-delta '<b64>'` on Kakoune's
@@ -487,7 +490,7 @@ define-command -hidden -params ..1 -docstring %{
     # mutations then run as LITERAL Kakoune commands OUTSIDE %sh{}, referencing
     # %opt{llm_delta_esc} / %val{cursor_*} which Kakoune expands at evaluation time.
     # This avoids the broken `evaluate-commands %sh{ printf lines }` re-parse path
-    # entirely (probe23 proves stdout is NOT re-parsed in this build).
+    # entirely (stdout is NOT re-parsed in this build).
     evaluate-commands %sh{
         # %sh{} bodies run in isolated POSIX shells, so kak_send is redefined here
         # (a Kakoune command cannot be called from inside %sh{}).
@@ -561,12 +564,11 @@ define-command -hidden -params ..1 -docstring %{
                 fi
             fi
         fi
-        # First delta of the stream initialises start/activate/snapshot. Use
-        # kak_send because evaluate-commands %sh{} stdout is NOT re-parsed in this
-        # build (probe23), so Kakoune commands must be sent via kak -p.
-        # Kakoune has no `if` command, so conditionals must live inside %sh{} where
-        # POSIX `if [ ]` works.
-        # Atomic first-delta init: mkdir is atomic, so only one %sh{} process wins.
+        # First delta of the stream initialises start/activate/snapshot.
+        # evaluate-commands %sh{} stdout is NOT re-parsed, so Kakoune commands
+        # must be sent via kak -p. Kakoune has no `if` command, so conditionals
+        # live inside %sh{} where POSIX `if [ ]` works. Atomic first-delta init:
+        # mkdir is atomic, so only one %sh{} process wins.
         if mkdir "${kak_opt_llm_dir}/.pre_init_lock" 2>/dev/null; then
             kak_send "set-option global llm_draft_start '${kak_cursor_line},${kak_cursor_column}'"
             kak_send "set-option global llm_draft_active true"
@@ -613,6 +615,7 @@ define-command -hidden -params ..1 -docstring %{
 # path or the normal path.
 define-command -hidden -docstring %{
     llm-draft-clear: reset the LLM draft ghost-text state (start/anchor/active) to empty.
+    Single source of truth for draft teardown; safe to call on the no-op path or normal path.
 } llm-draft-clear %{
     set-option global llm_draft_active false
     set-option global llm_draft_start ""
@@ -628,9 +631,9 @@ define-command -hidden -docstring %{
 define-command -docstring %{
     llm-accept: select the accumulated LLM draft ghost-text span (start -> anchor) and
     deactivate draft tracking. The text was inserted incrementally as separate undo nodes,
-    so this is no undo-group fold: a single `undo` removes only the last delta. The
-    absolute-range `select` repositions the cursor and selects the span (it does not insert
-    or delete text). No-op when no draft is active.
+    so this is not an undo-group fold: a single `undo` removes only the last delta.
+    The absolute-range `select` repositions the cursor and selects the span (it does not
+    insert or delete text). No-op when no draft is active.
 } llm-accept %{
     evaluate-commands %sh{
         kak_send() { printf '%s\n' "$1" | kak -p "${kak_session}"; }
@@ -662,8 +665,8 @@ define-command -docstring %{
 # inserted incrementally as separate undo nodes; this erase is its own undo node. No-op
 # when no draft is active.
 define-command -docstring %{
-    llm-reject: erase the accumulated LLM draft ghost text with a single `execute-keys d`,
-    so one `undo` restores the original buffer. No-op when no draft is active.
+    llm-reject: erase the accumulated LLM draft ghost-text span with a single
+    `execute-keys d`, so one `undo` restores the erased span. No-op when no draft is active.
 } llm-reject %{
     evaluate-commands %sh{
         kak_send() { printf '%s\n' "$1" | kak -p "${kak_session}"; }
@@ -746,7 +749,11 @@ define-command -docstring %{
 # closes (Qwen killed) — that is the teardown signal handled. Uses jq when available,
 # else a POSIX sed fallback for the delta field.
 define-command -hidden -docstring %{
-    llm-tail-loop: read the events FIFO and stream content_block_delta text as ghost text.
+    llm-tail-loop: detached POSIX tailer. Reads the session's events.jsonl FIFO,
+    classifies each event (content_block_delta, control_request, session_start),
+    dispatches content_block_delta to llm-append-delta as a single base64 argument,
+    buffers pending control_request ids when llm_auto_approve_control is false, and
+    tears the session down via llm-stop on FIFO EOF (Qwen exit) or drift stop-file.
 } llm-tail-loop %{
     evaluate-commands %sh{
         # Delivery is configured once `dir` is resolved below (see

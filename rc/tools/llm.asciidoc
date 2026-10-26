@@ -28,7 +28,7 @@ options (see <<_options>>) and exposes these user-facing commands:
   this does **not** fold into one undo group: a single `undo` removes only the last
   delta. It repositions the cursor; it does not insert or delete text. No-op when no draft is active.
 * `llm-reject` — erase the accumulated ghost-text span with a single
-  `execute-keys d`, so a single `undo` restores it. No-op when no draft is active.
+  `execute-keys d`, so a single `undo` restores the erased span. No-op when no draft is active.
 * `llm-approve` — confirm control_request approvals buffered by the detached
   tailer during the current session: writes a `confirmation_response` for each
   pending request_id to the `--input-file` channel and clears the pending buffer.
@@ -52,9 +52,9 @@ hidden; they own the escaping, drift tracking, span accumulation, and FIFO taili
   `llm-stop`) when Qwen exits.
 
   NOTE: `llm-tail-loop` is launched from `llm-session` for interactive sessions
-  where the Kakoune session is reachable via `kak -p` and the command is not
-  `mock-qwen`. It is skipped for headless sessions or `mock-qwen` to avoid FIFO
-  contention with the test harness. When launched, the tailer runs detached via
+  where the Kakoune session is reachable via `kak -p`. It is skipped for
+  headless sessions or when the command is `mock-qwen` (a test harness stub)
+  to avoid FIFO contention. When launched, the tailer runs detached via
   `setsid` and streams `content_block_delta` to `llm-append-delta` via the daemon
   delivery path.
 
@@ -110,7 +110,7 @@ standard build (see `rc/tools/llm.kak` for the exact call sites):
 `evaluate-commands`, `set-option`, and `printf`/`awk` are also required, but are present
 on every standard build.
 
-`llm-accept` performs only the absolute-range `select`. `llm-reject` derives the exact
+`llm-accept` performs only the absolute-range `select`. `llm-reject` derives the
 byte-exact erase span with `awk` from a fresh pre-draft snapshot of the buffer
 (needed because the end coordinate differs across lines — same-line spans use
 `a_col-1`; when the anchor sits at column 1 of a later line the last ghost byte is

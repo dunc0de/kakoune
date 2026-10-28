@@ -25,8 +25,8 @@
   },
   {
     "instruction": "Write a script that adds a highlighter which colors every occurrence of the word TODO in red in the current buffer.",
-    "ground_truth": "define-command -docstring \"Highlight TODO occurrences\" mytool-highlight-todo %{\n    add-highlighter --override mytool-todo regex TODO fg:red\n}",
-    "note": "Use add-highlighter with a name, a regex, and an attribute; --override replaces any prior highlighter of the same name."
+    "ground_truth": "define-command -docstring \"Highlight TODO occurrences\" mytool-highlight-todo %{\n    add-highlighter -override buffer/mytool-todo regex TODO 0:red\n}",
+    "note": "Use add-highlighter with `-override` (single dash), a buffer scope (`buffer/<name>`), a regex, and a capture-group spec (`0:red`) — not `fg:red`. The `-override` flag replaces any existing highlighter of the same path/name."
   },
   {
     "instruction": "Write a script that runs a hook which echoes a message whenever a new buffer is created.",

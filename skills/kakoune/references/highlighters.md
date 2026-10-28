@@ -16,6 +16,30 @@ add-highlighter [-override] <path>/<name> <type> [args...]
   `ranges`, `replace-ranges`, `number-lines`, `wrap`, `show-matching`,
   `show-whitespaces`, `ref`, etc.
 
+> **Flag syntax**: `-override` is a **single-dash** flag. `--override` (double
+> dash) is rejected as an unknown option.
+
+## Regex highlighter attributes
+
+For `regex` type, color/style is specified as `<capture_group>:<face>`:
+
+```kakoune
+add-highlighter -override buffer/myhl regex TODO 0:red
+add-highlighter -override buffer/git-hl regex '^## ' 0:comment
+add-highlighter -override buffer/multi-hl regex '(\w+): (.*)' 1:keyword 2:value
+```
+
+- `0:red` — the whole match in red
+- `1:green` — first capture group in green
+- `2:comment` — second capture group styled as comment
+
+**Not `fg:red`** — that syntax is invalid for `add-highlighter`. Color is always
+a capture-group spec (`N:<face>`), never a key-value pair.
+
+Common faces: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `keyword`,
+`comment`, `string`, `number`, `variable`, `value`, `error`, `warning`,
+`information`, `Default`.
+
 ## Scopes
 
 - `global` — applies across all windows of all buffers of a type.

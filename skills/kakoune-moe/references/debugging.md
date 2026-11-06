@@ -84,6 +84,36 @@ Hooks fire based on **entire-parameter-string** matching (not substring). A filt
 - **Draft-context hooks** (`WinCreate`, `WinClose`, `WinResize`, `WinDisplay`, `WinSetOption`) discard selection/input changes but persist buffer writes. A hook calling `normal-mode` inside a draft context appears to work but the change is thrown away. Use `-always` for guaranteed trigger, and prefer `%sh{}` env vars or buffer-scoped hooks for persistent state.
 - **RawKey** can't be triggered by `execute-keys`, even with `-with-hooks`. This prevents recursive key-trigger loops from within scripts — intentional but surprising.
 
+### Silent No-Op Hooks: Expansions That Don't Expand Inside `%sh{}`
+
+Kakoune does **not** expand `%opt{...}`, `%val{...}`, or `%reg{...}` inside a `%sh{...}` body — the shell receives the raw text. A guard like `awk '$1 == "true"'` fed `%opt{foo}` therefore compares the *literal string* `%opt{foo}` to `"true"`, never matches, prints nothing, and the hook's `evaluate-commands ""` is a **silent no-op** (an empty command string produces no error). The symptom is indistinguishable from "the hook never fires."
+
+- Inside `%sh{}`, use the env vars Kakoune exports: `$kak_opt_<name>`, `$kak_reg_<name>`, `$kak_cursor_line`, `$kak_buf_line_count`, `$kak_hook_param*`.
+- The inverse trap: `$kak_opt_*` only exist in the `%sh` environment. A bare `echo $kak_opt_x` (at the prompt or in a hook body) prints empty — that is **not** evidence the option is unset.
+- When a hook "never fires" with no error anywhere, first prove whether its `%sh` guard printed anything (e.g. `%sh{ echo "fired" >> /tmp/log; ... }`) before suspecting the hook wiring.
+
+### `execute-keys` Inside an All-Keys Hook Types Into the Open Prompt
+
+A `hook ... NormalKey .*` fires on **every** normal key, including `:`, which opens the command line. If the hook body runs `execute-keys`, the keys are fed to the input handler's *current* mode: in Prompt mode, printable characters are typed **into the command line** (`Prompt::on_key`), so `execute-keys 4j` issued at the moment the user pressed `:` prepends `4j` to whatever they type next → `1:1: '4jecho': no such command` (the error shows only the first token; the rest is swallowed as its arguments). This also corrupts any `:` command that toggles your hook's state option, so the lock silently stays on/off.
+
+Fix pattern: make the hook act only on a state change that only *moving* keys produce — e.g. compare `$kak_cursor_line` against a hidden bookkeeping option (`declare-option -hidden int myscript_last_line 0`) and skip when unchanged; update the option after each jump. Non-moving keys (`:`, count digits, pending-key prefixes) then never trigger the jump.
+
+Related benign noise: when a hook's `execute-keys` re-enters hook processing, `\*debug*\` gets a `recursive call of hook <name>/<key>, not executing` line. That is the `run_hook` re-entrancy guard — expected and harmless (the inner keys run with hooks disabled, so nothing re-executes).
+
+### Lazy Token Expansion Changes What `%val{...}` Sees
+
+`CommandManager::execute` (and hence multi-command `evaluate-commands` output) is a lazy read-token→execute loop: each token is expanded **just before its own command runs**, not all up front. A trailing `set-option ... %val{cursor_line}` in the same `%sh` output therefore captures the **post-jump** cursor position after an earlier `execute-keys` token moved it. Order tokens by dependency; don't assume single-pass expansion.
+
+### TUI Test Sequences That Leave Pending Input State
+
+Key sequences that are complete in vim can leave *pending* state in Kakoune, and the next test key is then interpreted in the wrong mode:
+
+- Count + `g` is already complete: `4g` jumps to line 4. A following bare `g` (count 0) opens the **pending goto** state — status line shows `enter key` and the goto menu. So `4gg` ≠ vim's "go to line 4"; it leaves the menu open.
+- While pending, the next key is a goto subkey, not a normal key: `j` = buffer bottom, `e` = buffer end, `g`/`k` = buffer top, `M` = middle. A test that sends `j` right after `4gg` measures `gj`, not `j` (cursor lands on the last line, not one line down).
+- The `NormalKey` hook still fires on the key that opens the pending state, so hook side effects can interleave with the menu.
+
+Rule: after every key sent in a tmux scenario, verify the status line shows the expected mode (`-- Normal --`, not `enter key` / `-- Command --`) before sending the next key. A snapshot caught in a pending state invalidates every step that follows it.
+
 ### Keystroke Breaking Under Mappings
 
 `execute-keys` runs keystrokes subject to mappings unless `-with-maps` is used. A Normal-mode mapping for the same key will intercept your keystrokes, silently changing what happens. Use `evaluate-commands -no-hooks` when calling commands from hooks to prevent reentrancy (a command you call triggers a hook → that hook calls back into `execute-keys` → infinite loop without `-no-hooks`).

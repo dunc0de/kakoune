@@ -47,6 +47,8 @@ Use when the user reports or asks about:
 - why does my Kakoune script misbehave in certain contexts?
 - debug Kakoune keystrokes / command quoting that silently change behavior,
 - this hook doesn't fire (or fires at wrong time) — especially in draft mode,
+- a hook silently no-ops with no error (`%sh` guard comparing unexpanded `%opt{...}`), or a `NormalKey` hook's `execute-keys` corrupts `:`-typed commands,
+- a tmux test sequence misbehaves after a key that leaves pending input state (`enter key` mode, e.g. bare `g`),
 - `execute-keys` vs `evaluate-commands` confusion producing different results,
 - FIFO hooks hanging or re-entering infinitely,
 - multi-selection scripts dropping selections without `-itersel`,
